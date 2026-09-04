@@ -16,19 +16,15 @@
             font-size: 14px;
         }
         canvas { display: block; }
+        /* Webcam fills the whole screen, mirrored like a selfie */
         #video-container {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            width: 160px;
-            height: 120px;
-            border: 2px solid rgba(255,255,255,0.2);
-            border-radius: 10px;
-            overflow: hidden;
-            z-index: 5;
+            position: fixed;
+            inset: 0;
+            z-index: 0;
             transform: scaleX(-1);
         }
         video { width: 100%; height: 100%; object-fit: cover; }
+        canvas { position: fixed; inset: 0; z-index: 1; }
     </style>
 </head>
 <body>
@@ -69,7 +65,8 @@
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.z = 15;
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setClearColor(0x000000, 0);   // transparent so the webcam shows through
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         document.body.appendChild(renderer.domElement);
@@ -192,9 +189,22 @@
                     acc.x += lm[k].x / 5; acc.y += lm[k].y / 5; return acc;
                 }, { x: 0, y: 0 });
 
-                const targetX = (0.5 - palm.x) * 22;
-                const targetY = (0.5 - palm.y) * 14;
-                handPos.lerp(new THREE.Vector3(targetX, targetY, 0), 0.25);
+                // Convert the palm position (0..1 in the video) to a spot on screen,
+                // accounting for the video being cropped to fill the screen and mirrored.
+                const vidW = videoElement.videoWidth  || 640;
+                const vidH = videoElement.videoHeight || 480;
+                const scrW = window.innerWidth, scrH = window.innerHeight;
+                const sc = Math.max(scrW / vidW, scrH / vidH);
+                const dispW = vidW * sc, dispH = vidH * sc;
+                const nx = 1 - (palm.x * dispW - (dispW - scrW) / 2) / scrW;  // mirrored
+                const ny =     (palm.y * dispH - (dispH - scrH) / 2) / scrH;
+
+                // Then to 3D world units at the fire's depth (z = 0)
+                const visH = 2 * camera.position.z * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+                const visW = visH * camera.aspect;
+                const targetX = (nx - 0.5) * visW;
+                const targetY = (0.5 - ny) * visH;
+                handPos.lerp(new THREE.Vector3(targetX, targetY, 0), 0.3);
 
                 // Openness: how far the fingertips are from the palm, relative to hand size
                 const handSize = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) + 0.001;
@@ -216,7 +226,7 @@
 
         const cam = new Camera(videoElement, {
             onFrame: async () => { await hands.send({ image: videoElement }); },
-            width: 320, height: 240
+            width: 640, height: 480
         });
         cam.start();
 
