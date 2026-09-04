@@ -224,32 +224,33 @@
                 const targetY = (0.5 - ny) * visH;
                 handPos.lerp(new THREE.Vector3(targetX, targetY, 0), 0.5);
 
-                // Openness: how far the fingertips are from the palm, relative to hand size
-                const handSize = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) + 0.001;
+                // Openness: how far the fingertips are from the palm, relative to hand size.
+                // Uses x, y AND depth (z), so fingers pointing at the camera still count as open.
+                const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+                const palm3 = { x: palm.x, y: palm.y, z: [0, 5, 9, 13, 17].reduce((t, k) => t + (lm[k].z || 0) / 5, 0) };
+                const handSize = d3(lm[0], lm[9]) + 0.001;
                 let open = 0;
-                for (const tip of [8, 12, 16, 20]) {
-                    open += Math.hypot(lm[tip].x - palm.x, lm[tip].y - palm.y) / handSize;
-                }
-                open /= 4;   // roughly 0.5 = fist, 1.6 = wide open
+                for (const tip of [8, 12, 16, 20]) open += d3(lm[tip], palm3) / handSize;
+                open /= 4;   // roughly 0.6 = fist, 1.1 = cupped, 1.6 = wide open
                 // lights up quickly once fingers start opening (lower first number = lights sooner)
-                let want = THREE.MathUtils.clamp((open - 0.7) / 0.5, 0, 1);
+                let want = THREE.MathUtils.clamp((open - 0.75) / 0.45, 0, 1);
 
                 // Only light up when the PALM faces the camera, not the back of the hand.
-                // We look at which way the index and pinky knuckles wrap around the wrist,
-                // combined with whether it's a left or right hand.
+                // If the hand is edge-on and we can't tell, keep the fire on.
                 const v1x = lm[5].x - lm[0].x,  v1y = lm[5].y - lm[0].y;
                 const v2x = lm[17].x - lm[0].x, v2y = lm[17].y - lm[0].y;
-                const cross = v1x * v2y - v1y * v2x;
+                const size2d = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) + 0.001;
+                const cross = (v1x * v2y - v1y * v2x) / (size2d * size2d);
                 const label = results.multiHandedness && results.multiHandedness[0]
                     ? results.multiHandedness[0].label : 'Left';
-                let palmFacing = (label === 'Left') ? cross < 0 : cross > 0;
-                if (FLIP_PALM_CHECK) palmFacing = !palmFacing;
-                if (!palmFacing) want = 0;
+                let backOfHand = (label === 'Left') ? cross > 0.35 : cross < -0.35;
+                if (FLIP_PALM_CHECK) backOfHand = (label === 'Left') ? cross < -0.35 : cross > 0.35;
+                if (backOfHand) want = 0;
 
                 targetIntensity = want;
 
                 // Closer hand = bigger hand in the video = bigger fire
-                targetHandScale = THREE.MathUtils.clamp(handSize / 0.13, 0.6, 2.5);
+                targetHandScale = THREE.MathUtils.clamp(size2d / 0.13, 0.6, 2.5);
             } else {
                 handSeen = false;
                 targetIntensity = 0;
