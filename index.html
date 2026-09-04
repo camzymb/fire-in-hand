@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Hand-Tracked Particle Simulation</title>
+    <title>Fire in Hand</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         #info {
@@ -10,10 +10,10 @@
             top: 20px;
             width: 100%;
             text-align: center;
-            color: white;
+            color: rgba(255,255,255,0.6);
             pointer-events: none;
             z-index: 10;
-            text-shadow: 0 0 10px rgba(0,0,0,0.5);
+            font-size: 14px;
         }
         canvas { display: block; }
         #video-container {
@@ -22,371 +22,244 @@
             left: 20px;
             width: 160px;
             height: 120px;
-            border: 2px solid rgba(255,255,255,0.3);
+            border: 2px solid rgba(255,255,255,0.2);
             border-radius: 10px;
             overflow: hidden;
             z-index: 5;
-            transform: scaleX(-1); /* Mirror for user feel */
+            transform: scaleX(-1);
         }
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
+        video { width: 100%; height: 100%; object-fit: cover; }
     </style>
 </head>
 <body>
 
-    <div id="info">
-        <h2>AI Particle Shaper</h2>
-        <p>👋 Move Hand: Position | 👌 Pinch: Expand | ✊ Fist: Change Shape</p>
-    </div>
+    <div id="info">Open your palm to summon fire. Spread your fingers to make it bigger. Close your fist to snuff it out.</div>
 
     <div id="video-container">
         <video id="input_video"></video>
     </div>
 
-    <!-- Import Maps -->
     <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "@mediapipe/hands": "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js",
-                "@mediapipe/camera_utils": "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
-            }
-        }
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
     </script>
 
-    <!-- MediaPipe Global Scripts (Non-module fallback for some CDN quirks) -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
     <script type="module">
         import * as THREE from 'three';
 
-        // --- Configuration ---
-        const PARTICLE_COUNT = 4000;
-        const PARTICLE_SIZE = 0.15;
-        const SHAPES = ['sphere', 'heart', 'flower', 'saturn', 'tornado'];
-        let currentShapeIndex = 0;
-        
-        // --- State ---
-        let handPos = new THREE.Vector3(0, 0, 0);
-        let expansionFactor = 0;
-        let hueOffset = 0;
-        let isFist = false;
-        let lastFistTime = 0;
+        // ================= SETTINGS YOU CAN PLAY WITH =================
+        const PARTICLE_COUNT = 3000;   // more = denser fire, but slower
+        const FLAME_HEIGHT   = 5.0;    // how tall the flames reach
+        const FLAME_WIDTH    = 1.2;    // how wide the base of the fire is
+        const RISE_SPEED     = 3.0;    // how fast particles float upward
+        const FLICKER        = 1.4;    // side-to-side wobble amount
+        const PARTICLE_SIZE  = 40.0;   // base size of each spark
+        // ==============================================================
 
-        // --- Three.js Setup ---
+        // --- Hand state ---
+        let handPos = new THREE.Vector3(0, -3, 0);
+        let intensity = 0;        // 0 = no fire, 1 = full fire
+        let targetIntensity = 0;
+        let handSeen = false;
+
+        // --- Three.js setup ---
         const scene = new THREE.Scene();
-        // Fog for depth
-        scene.fog = new THREE.FogExp2(0x000000, 0.02);
-
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.z = 15;
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         document.body.appendChild(renderer.domElement);
 
-        // --- Texture Generation (Glowing Dot) ---
+        // Soft round glow texture
         function createTexture() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 32;
-            canvas.height = 32;
-            const context = canvas.getContext('2d');
-            const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
-            gradient.addColorStop(0, 'rgba(255,255,255,1)');
-            gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
-            gradient.addColorStop(0.5, 'rgba(255,255,255,0.2)');
-            gradient.addColorStop(1, 'rgba(0,0,0,0)');
-            context.fillStyle = gradient;
-            context.fillRect(0, 0, 32, 32);
-            const texture = new THREE.Texture(canvas);
-            texture.needsUpdate = true;
-            return texture;
+            const c = document.createElement('canvas');
+            c.width = 64; c.height = 64;
+            const ctx = c.getContext('2d');
+            const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            g.addColorStop(0.0, 'rgba(255,255,255,1)');
+            g.addColorStop(0.25, 'rgba(255,255,255,0.6)');
+            g.addColorStop(0.6, 'rgba(255,255,255,0.12)');
+            g.addColorStop(1.0, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, 64, 64);
+            const t = new THREE.Texture(c);
+            t.needsUpdate = true;
+            return t;
         }
 
-        // --- Particles Setup ---
-        const geometry = new THREE.BufferGeometry();
+        // --- Particle data ---
         const positions = new Float32Array(PARTICLE_COUNT * 3);
-        const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
-        const colors = new Float32Array(PARTICLE_COUNT * 3);
+        const lifeAttr  = new Float32Array(PARTICLE_COUNT);   // 0..1, how far through its life
+        const sizeAttr  = new Float32Array(PARTICLE_COUNT);
 
-        // Initialize positions
-        for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
-            positions[i] = (Math.random() - 0.5) * 20;
-            targetPositions[i] = positions[i];
-            colors[i] = 1;
+        const age      = new Float32Array(PARTICLE_COUNT);    // seconds alive
+        const maxAge   = new Float32Array(PARTICLE_COUNT);
+        const vel      = new Float32Array(PARTICLE_COUNT * 3);
+        const seed     = new Float32Array(PARTICLE_COUNT);
+
+        function respawn(i) {
+            const idx = i * 3;
+            // start in a flat disc at the palm
+            const a = Math.random() * Math.PI * 2;
+            const r = Math.sqrt(Math.random()) * FLAME_WIDTH * (0.3 + intensity * 0.7);
+            positions[idx]     = handPos.x + Math.cos(a) * r;
+            positions[idx + 1] = handPos.y + (Math.random() - 0.5) * 0.3;
+            positions[idx + 2] = handPos.z + Math.sin(a) * r * 0.6;
+
+            // particles near the centre live longer and rise higher
+            const centerness = 1 - r / (FLAME_WIDTH + 0.001);
+            maxAge[i] = (0.6 + Math.random() * 0.8) * (0.5 + centerness) * (0.3 + intensity);
+            age[i] = Math.random() * 0.1;
+
+            vel[idx]     = (Math.random() - 0.5) * 0.6;
+            vel[idx + 1] = RISE_SPEED * (0.7 + Math.random() * 0.6) * (0.4 + intensity * 0.6);
+            vel[idx + 2] = (Math.random() - 0.5) * 0.6;
+
+            seed[i] = Math.random() * 100;
+            sizeAttr[i] = PARTICLE_SIZE * (0.6 + Math.random() * 0.8);
         }
 
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            respawn(i);
+            age[i] = Math.random() * maxAge[i]; // stagger so it doesn't start as a burst
+        }
 
-        const material = new THREE.PointsMaterial({
-            size: PARTICLE_SIZE,
-            map: createTexture(),
-            vertexColors: true,
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('aLife', new THREE.BufferAttribute(lifeAttr, 1));
+        geometry.setAttribute('aSize', new THREE.BufferAttribute(sizeAttr, 1));
+
+        // Custom shader so each spark can have its own size and colour over its life
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                uTex: { value: createTexture() },
+                uIntensity: { value: 0 }
+            },
+            vertexShader: `
+                attribute float aLife;
+                attribute float aSize;
+                varying float vLife;
+                void main() {
+                    vLife = aLife;
+                    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                    // sparks shrink as they age
+                    float s = aSize * (1.0 - aLife * 0.8);
+                    gl_PointSize = s * (10.0 / -mv.z);
+                    gl_Position = projectionMatrix * mv;
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTex;
+                uniform float uIntensity;
+                varying float vLife;
+                void main() {
+                    float a = texture2D(uTex, gl_PointCoord).a;
+                    // colour ramp: white-yellow -> orange -> red -> dark
+                    vec3 c1 = vec3(1.0, 0.95, 0.6);
+                    vec3 c2 = vec3(1.0, 0.55, 0.08);
+                    vec3 c3 = vec3(0.85, 0.12, 0.02);
+                    vec3 c4 = vec3(0.15, 0.0, 0.0);
+                    vec3 col;
+                    if (vLife < 0.25)      col = mix(c1, c2, vLife / 0.25);
+                    else if (vLife < 0.6)  col = mix(c2, c3, (vLife - 0.25) / 0.35);
+                    else                   col = mix(c3, c4, (vLife - 0.6) / 0.4);
+                    float fade = 1.0 - smoothstep(0.5, 1.0, vLife);
+                    gl_FragColor = vec4(col, a * fade * uIntensity);
+                }
+            `,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
             transparent: true
         });
 
-        const particleSystem = new THREE.Points(geometry, material);
-        scene.add(particleSystem);
+        const fire = new THREE.Points(geometry, material);
+        scene.add(fire);
 
-        // --- Math & Shapes ---
-        // Helper to map Sphere coordinates
-        function getSpherePoint(i) {
-            const phi = Math.acos(-1 + (2 * i) / PARTICLE_COUNT);
-            const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
-            const r = 4;
-            return {
-                x: r * Math.cos(theta) * Math.sin(phi),
-                y: r * Math.sin(theta) * Math.sin(phi),
-                z: r * Math.cos(phi)
-            };
-        }
-
-        function calculateTargets(shapeType) {
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                let x, y, z;
-                const idx = i * 3;
-
-                if (shapeType === 'sphere') {
-                    const p = getSpherePoint(i);
-                    x = p.x; y = p.y; z = p.z;
-                } 
-                else if (shapeType === 'heart') {
-                    // 3D Heart parametric equations
-                    const phi = (i / PARTICLE_COUNT) * Math.PI * 2;
-                    const theta = (i % 50) / 50 * Math.PI; // Layers
-                    // Classic 2D shape extruded slightly or rotated
-                    // Using a pseudo-3D volume approach
-                    const t = phi;
-                    const r = 0.3; 
-                    // Heart curve
-                    x = 16 * Math.pow(Math.sin(t), 3);
-                    y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
-                    z = (Math.random() - 0.5) * 4; // Thickness
-                    // Scale down
-                    x *= 0.25; y *= 0.25;
-                }
-                else if (shapeType === 'flower') {
-                    const u = (i / PARTICLE_COUNT) * Math.PI * 2 * 5; // 5 petals
-                    const v = (i % 100) / 100 * Math.PI;
-                    const r = 3 + Math.cos(u * 5); // Radius modulation
-                    x = r * Math.sin(v) * Math.cos(u);
-                    y = r * Math.sin(v) * Math.sin(u);
-                    z = r * Math.cos(v) * 0.5;
-                }
-                else if (shapeType === 'saturn') {
-                    // 70% Planet, 30% Ring
-                    if (i < PARTICLE_COUNT * 0.7) {
-                        const p = getSpherePoint(i);
-                        x = p.x * 0.8; y = p.y * 0.8; z = p.z * 0.8;
-                    } else {
-                        const angle = (i / (PARTICLE_COUNT * 0.3)) * Math.PI * 2;
-                        const dist = 5 + Math.random() * 2;
-                        x = Math.cos(angle) * dist;
-                        z = Math.sin(angle) * dist;
-                        y = (Math.random() - 0.5) * 0.2;
-                    }
-                }
-                else if (shapeType === 'tornado') {
-                    const angle = i * 0.1;
-                    const h = (i / PARTICLE_COUNT) * 10 - 5;
-                    const r = 0.5 + Math.abs(h) * 0.8;
-                    x = Math.cos(angle) * r;
-                    z = Math.sin(angle) * r;
-                    y = h;
-                }
-
-                targetPositions[idx] = x;
-                targetPositions[idx + 1] = y;
-                targetPositions[idx + 2] = z;
-            }
-        }
-
-        // Initial Calculation
-        calculateTargets(SHAPES[0]);
-
-        // --- Interaction Logic ---
-        function switchShape() {
-            currentShapeIndex = (currentShapeIndex + 1) % SHAPES.length;
-            calculateTargets(SHAPES[currentShapeIndex]);
-            
-            // Visual feedback
-            const info = document.querySelector('h2');
-            info.innerText = `✨ ${SHAPES[currentShapeIndex].toUpperCase()} ✨`;
-            info.style.color = '#ff00ff';
-            setTimeout(() => info.style.color = 'white', 500);
-        }
-
-        // --- MediaPipe Implementation ---
+        // --- MediaPipe hand tracking ---
         const videoElement = document.getElementById('input_video');
-        
+
         function onResults(results) {
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const landmarks = results.multiHandLandmarks[0];
-                
-                // 1. Position Tracking (Index Finger Tip is #8)
-                const indexTip = landmarks[8];
-                const thumbTip = landmarks[4];
-                const middleTip = landmarks[12];
-                const ringTip = landmarks[16];
-                const pinkyTip = landmarks[20];
-                const wrist = landmarks[0];
+                const lm = results.multiHandLandmarks[0];
+                handSeen = true;
 
-                // Map 0-1 video coordinates to 3D world coordinates
-                // Video is mirrored in CSS, but coordinates come raw.
-                // x: 0 (left) -> 1 (right), y: 0 (top) -> 1 (bottom)
-                // We inverse X to match the mirrored feel
-                const targetX = (0.5 - indexTip.x) * 20; 
-                const targetY = (0.5 - indexTip.y) * 15;
-                
-                // Smoothly update hand position variable
-                handPos.lerp(new THREE.Vector3(targetX, targetY, 0), 0.1);
+                // Palm centre = average of wrist and the four finger bases
+                const palm = [0, 5, 9, 13, 17].reduce((acc, k) => {
+                    acc.x += lm[k].x / 5; acc.y += lm[k].y / 5; return acc;
+                }, { x: 0, y: 0 });
 
-                // 2. Pinch Detection (Expansion)
-                // Distance between Thumb(4) and Index(8)
-                const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
-                // If distance is small (< 0.05), it's a pinch. If large, it's open.
-                // We map distance to expansion. Large distance = high expansion.
-                expansionFactor = THREE.MathUtils.lerp(expansionFactor, pinchDist * 15, 0.1);
+                const targetX = (0.5 - palm.x) * 22;
+                const targetY = (0.5 - palm.y) * 14;
+                handPos.lerp(new THREE.Vector3(targetX, targetY, 0), 0.25);
 
-                // 3. Fist Detection (Shape Switch)
-                // Simple logic: if fingers are close to wrist
-                const fingersFolded = 
-                    middleTip.y > wrist.y - 0.1 && 
-                    ringTip.y > wrist.y - 0.1 && 
-                    pinkyTip.y > wrist.y - 0.1;
-                
-                if (fingersFolded && !isFist) {
-                    const now = Date.now();
-                    if (now - lastFistTime > 1000) { // Cooldown 1 sec
-                        switchShape();
-                        lastFistTime = now;
-                    }
-                    isFist = true;
-                } else if (!fingersFolded) {
-                    isFist = false;
+                // Openness: how far the fingertips are from the palm, relative to hand size
+                const handSize = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) + 0.001;
+                let open = 0;
+                for (const tip of [8, 12, 16, 20]) {
+                    open += Math.hypot(lm[tip].x - palm.x, lm[tip].y - palm.y) / handSize;
                 }
-
-                // 4. Color Logic (Palm Openness or just X Position)
-                hueOffset += 0.005; // Constant shift
-                // Accelerate shift if hand is wide open (spread fingers)
-                const spread = Math.abs(pinkyTip.x - thumbTip.x);
-                if (spread > 0.15) hueOffset += 0.02;
-
+                open /= 4;   // roughly 0.5 = fist, 1.6 = wide open
+                targetIntensity = THREE.MathUtils.clamp((open - 0.8) / 0.8, 0, 1);
             } else {
-                // Return to center if no hand
-                handPos.lerp(new THREE.Vector3(0, 0, 0), 0.05);
-                expansionFactor = THREE.MathUtils.lerp(expansionFactor, 1, 0.05);
+                handSeen = false;
+                targetIntensity = 0;
             }
         }
 
-        const hands = new Hands({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }});
-
-        hands.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
-
+        const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
         hands.onResults(onResults);
 
-        const cameraUtils = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 320,
-            height: 240
+        const cam = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({ image: videoElement }); },
+            width: 320, height: 240
         });
-        cameraUtils.start();
+        cam.start();
 
-
-        // --- Main Animation Loop ---
+        // --- Animation loop ---
         const clock = new THREE.Clock();
 
         function animate() {
             requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.05);
+            const t = clock.getElapsedTime();
 
-            const time = clock.getElapsedTime();
-            const positionsArray = geometry.attributes.position.array;
-            const colorsArray = geometry.attributes.color.array;
+            intensity += (targetIntensity - intensity) * 0.12;
+            material.uniforms.uIntensity.value = intensity;
 
-            // Update Logic
             for (let i = 0; i < PARTICLE_COUNT; i++) {
                 const idx = i * 3;
-                
-                // 1. Get Base Target position for current shape
-                let tx = targetPositions[idx];
-                let ty = targetPositions[idx + 1];
-                let tz = targetPositions[idx + 2];
+                age[i] += dt;
+                if (age[i] >= maxAge[i]) {
+                    if (intensity > 0.02) respawn(i);
+                    else { lifeAttr[i] = 1; continue; }   // fire is out, keep it invisible
+                }
+                const life = age[i] / maxAge[i];
+                lifeAttr[i] = life;
 
-                // 2. Apply Rotation to the whole shape automatically
-                const rotSpeed = 0.5 * time;
-                const cosR = Math.cos(rotSpeed * 0.2);
-                const sinR = Math.sin(rotSpeed * 0.2);
-                
-                // Simple Y-axis rotation logic for the shape base
-                const xRot = tx * cosR - tz * sinR;
-                const zRot = tx * sinR + tz * cosR;
-                tx = xRot; tz = zRot;
+                // wobble side to side like real flames, stronger higher up
+                const wob = Math.sin(t * 6 + seed[i]) * FLICKER * life * dt;
+                positions[idx]     += vel[idx] * dt + wob;
+                positions[idx + 1] += vel[idx + 1] * dt * (1 - life * 0.3);
+                positions[idx + 2] += vel[idx + 2] * dt + Math.cos(t * 5 + seed[i]) * FLICKER * 0.5 * life * dt;
 
-                // 3. Move Particles towards Hand Position
-                // We add the handPos to the shape center
-                tx += handPos.x;
-                ty += handPos.y;
-                tz += handPos.z;
-
-                // 4. Apply Expansion (Pinch/Explosion)
-                // Calculate vector from Hand Center to Particle
-                const dx = tx - handPos.x;
-                const dy = ty - handPos.y;
-                const dz = tz - handPos.z;
-                
-                // Add expansion offset
-                tx += dx * expansionFactor;
-                ty += dy * expansionFactor;
-                tz += dz * expansionFactor;
-
-                // 5. Morphing (Lerp current pos to calculated target)
-                // "Elasticity" factor
-                positionsArray[idx] += (tx - positionsArray[idx]) * 0.08;
-                positionsArray[idx + 1] += (ty - positionsArray[idx + 1]) * 0.08;
-                positionsArray[idx + 2] += (tz - positionsArray[idx + 2]) * 0.08;
-
-                // 6. Dynamic Coloring
-                // Color based on position relative to center + time
-                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                const color = new THREE.Color();
-                // HSL: Hue rotates, Saturation high, Lightness based on distance
-                color.setHSL((hueOffset + dist * 0.1) % 1, 0.8, 0.6);
-                
-                colorsArray[idx] = color.r;
-                colorsArray[idx + 1] = color.g;
-                colorsArray[idx + 2] = color.b;
+                // pull sparks inward as they rise so the flame tapers to a point
+                const pull = 0.9 * dt * life;
+                positions[idx]     += (handPos.x - positions[idx]) * pull;
+                positions[idx + 2] += (handPos.z - positions[idx + 2]) * pull;
             }
 
             geometry.attributes.position.needsUpdate = true;
-            geometry.attributes.color.needsUpdate = true;
-            
-            // Slight camera sway
-            camera.position.x = Math.sin(time * 0.2) * 2;
-            camera.lookAt(0, 0, 0);
+            geometry.attributes.aLife.needsUpdate = true;
+            geometry.attributes.aSize.needsUpdate = true;
 
             renderer.render(scene, camera);
         }
 
-        // Handle Resize
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
