@@ -47,11 +47,12 @@
 
         // ================= SETTINGS YOU CAN PLAY WITH =================
         const PARTICLE_COUNT = 5000;   // more = denser fire, but slower
-        const FIRE_SIZE      = 2.6;    // overall size of the fireball (1 = small, 3 = huge)
+        const FIRE_SIZE      = 3.6;    // overall size of the fireball (1 = small, 4 = huge)
         const FLAME_WIDTH    = 1.3;    // base width before FIRE_SIZE is applied
         const RISE_SPEED     = 3.2;    // how fast particles float upward
         const FLICKER        = 1.6;    // side-to-side wobble amount
-        const PARTICLE_SIZE  = 70.0;   // base size of each spark
+        const PARTICLE_SIZE  = 80.0;   // base size of each spark
+        const FLIP_PALM_CHECK = false; // if the fire shows on the BACK of your hand instead of the palm, change this to true
         const CORE_FRACTION  = 0.35;   // share of sparks that form the bright ball in the palm
         // ==============================================================
 
@@ -230,7 +231,21 @@
                     open += Math.hypot(lm[tip].x - palm.x, lm[tip].y - palm.y) / handSize;
                 }
                 open /= 4;   // roughly 0.5 = fist, 1.6 = wide open
-                targetIntensity = THREE.MathUtils.clamp((open - 0.8) / 0.8, 0, 1);
+                let want = THREE.MathUtils.clamp((open - 0.8) / 0.8, 0, 1);
+
+                // Only light up when the PALM faces the camera, not the back of the hand.
+                // We look at which way the index and pinky knuckles wrap around the wrist,
+                // combined with whether it's a left or right hand.
+                const v1x = lm[5].x - lm[0].x,  v1y = lm[5].y - lm[0].y;
+                const v2x = lm[17].x - lm[0].x, v2y = lm[17].y - lm[0].y;
+                const cross = v1x * v2y - v1y * v2x;
+                const label = results.multiHandedness && results.multiHandedness[0]
+                    ? results.multiHandedness[0].label : 'Left';
+                let palmFacing = (label === 'Left') ? cross < 0 : cross > 0;
+                if (FLIP_PALM_CHECK) palmFacing = !palmFacing;
+                if (!palmFacing) want = 0;
+
+                targetIntensity = want;
 
                 // Closer hand = bigger hand in the video = bigger fire
                 targetHandScale = THREE.MathUtils.clamp(handSize / 0.13, 0.6, 2.5);
