@@ -222,7 +222,7 @@
                 const visW = visH * camera.aspect;
                 const targetX = (nx - 0.5) * visW;
                 const targetY = (0.5 - ny) * visH;
-                handPos.lerp(new THREE.Vector3(targetX, targetY, 0), 0.3);
+                handPos.lerp(new THREE.Vector3(targetX, targetY, 0), 0.5);
 
                 // Openness: how far the fingertips are from the palm, relative to hand size
                 const handSize = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) + 0.001;
@@ -231,7 +231,8 @@
                     open += Math.hypot(lm[tip].x - palm.x, lm[tip].y - palm.y) / handSize;
                 }
                 open /= 4;   // roughly 0.5 = fist, 1.6 = wide open
-                let want = THREE.MathUtils.clamp((open - 0.8) / 0.8, 0, 1);
+                // lights up quickly once fingers start opening (lower first number = lights sooner)
+                let want = THREE.MathUtils.clamp((open - 0.7) / 0.5, 0, 1);
 
                 // Only light up when the PALM faces the camera, not the back of the hand.
                 // We look at which way the index and pinky knuckles wrap around the wrist,
@@ -256,7 +257,7 @@
         }
 
         const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
         hands.onResults(onResults);
 
         const cam = new Camera(videoElement, {
@@ -273,7 +274,9 @@
             const dt = Math.min(clock.getDelta(), 0.05);
             const t = clock.getElapsedTime();
 
-            intensity += (targetIntensity - intensity) * 0.12;
+            // react fast: light up quickly, snuff out even faster
+            const react = targetIntensity > intensity ? 0.35 : 0.5;
+            intensity += (targetIntensity - intensity) * react;
             handScale += (targetHandScale - handScale) * 0.1;
             material.uniforms.uIntensity.value = intensity;
 
@@ -282,7 +285,7 @@
                 age[i] += dt;
                 if (age[i] >= maxAge[i]) {
                     if (intensity > 0.02) respawn(i);
-                    else { lifeAttr[i] = 1; continue; }   // fire is out, keep it invisible
+                    else { lifeAttr[i] = 1; age[i] = maxAge[i] + Math.random() * 0.15; continue; }   // fire is out, keep it invisible
                 }
                 const life = age[i] / maxAge[i];
                 lifeAttr[i] = life;
